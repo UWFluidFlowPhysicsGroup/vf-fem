@@ -22,6 +22,7 @@ be linked to u1.
 from typing import Tuple, Mapping, Any
 
 import dolfin as dfn
+import ufl
 import numpy as np
 
 from blockarray import blockmat as bm, blockvec as bv
@@ -38,9 +39,9 @@ dfn.set_log_level(50)
 
 Info = Mapping[str, Any]
 
+
 def _add_static_docstring(func):
-    docs = \
-    """
+    docs = """
     Solve for the static state of a coupled model
 
     Parameters
@@ -62,14 +63,15 @@ def _add_static_docstring(func):
     func.__doc__ = func.__doc__ + docs
     return func
 
+
 @_add_static_docstring
 def static_solid_configuration(
-        model: slmodel.Model,
-        control: bv.BlockVector,
-        prop: bv.BlockVector,
-        state=None,
-        linear_solver: str='manual'
-    ) -> Tuple[bv.BlockVector, Info]:
+    model: slmodel.Model,
+    control: bv.BlockVector,
+    prop: bv.BlockVector,
+    state=None,
+    solver: str = 'manual',
+) -> Tuple[bv.BlockVector, Info]:
     """
     Return the static state for a solid model
 
@@ -79,38 +81,54 @@ def static_solid_configuration(
     elif isinstance(model, dynbase.BaseDynamicalModel):
         is_tra_model = False
     else:
-        raise ValueError()
+        raise TypeError(f"Unknown `model` type {type(model)}")
 
-    # Set the initial guess u=0 and constants (v, a) = (0, 0)
+    # Create a variable to store the solution
+    if is_tra_model:
+        state_n = model.state0.copy()
+    else:
+        state_n = model.state.copy()
+
+    # Create a zero state (useful for initial guesses)
+    zero_state = state_n.copy()
+    zero_state[:] = 0
+
+    # Set the initial guess (u, v, a = 0) if one isn't provided
     if state is None:
-        if is_tra_model:
-            state_n = model.state.copy()
-        else:
-            state_n = model.state0.copy()
         state_n[:] = 0.0
     else:
-        state_n = state
+        state_n[:] = state
 
-    if is_tra_model:
-        model.set_fin_state(state_n)
-        model.set_ini_state(state_n)
-    else:
-        model.set_state(state_n)
     model.set_control(control)
     model.set_prop(prop)
 
-    if linear_solver == 'manual':
-        def iterative_subproblem(x_n):
-            model.residual.form['coeff.state.u1'].vector()[:] = x_n
-            dx = model.residual.form['coeff.state.u1'].vector()
+    if solver == 'manual':
+        # Here use the non-linear governing residual to solve
+        # For a transient model, the residual contains initial condition effects
+        # and to get rid of these effects we can create a new residual where
+        # 'coeff.state.u0' always matches 'coeff.state.u1'
+        form = model.residual.form
+        if is_tra_model:
+            # Zero final/initial states to solve for a transient
+            zero_state = model.state1.copy()
+            zero_state[:] = 0
+            model.set_fin_state(zero_state)
+            model.set_ini_state(zero_state)
 
-            jac = dfn.derivative(
-                model.residual.form.form,
-                model.residual.form['coeff.state.u1']
+            res_form = ufl.replace(
+                form.form, {form['coeff.state.u0']: form['coeff.state.u1']}
             )
+        else:
+            res_form = form.form
+
+        jac = dfn.derivative(res_form, form['coeff.state.u1'])
+
+        def iterative_subproblem(x_n):
+            form['coeff.state.u1'].vector()[:] = x_n
+            dx = form['coeff.state.u1'].vector()
 
             def assem_res():
-                res = dfn.assemble(model.residual.form.form)
+                res = dfn.assemble(res_form)
                 for bc in model.residual.dirichlet_bcs:
                     bc.apply(res)
                 return res
@@ -128,29 +146,32 @@ def static_solid_configuration(
             return res_n.norm('l2')
 
         u_0 = model.residual.form['coeff.state.u1'].vector().copy()
+        u_0 = state_n.sub['u']
         u, info = nonlineq.newton_solve(u_0, iterative_subproblem, norm=norm)
         state_n['u'] = u
-    elif linear_solver == 'automatic':
+    elif solver == 'automatic':
         jac = dfn.derivative(
-            model.residual.form.form,
-            model.residual.form['coeff.state.u1']
+            model.residual.form.form, model.residual.form['coeff.state.u1']
         )
         dfn.solve(
             model.residual.form.form == 0.0,
             model.residual.form['coeff.state.u1'],
             bcs=model.residual.dirichlet_bcs,
             J=jac,
-            solver_parameters={"newton_solver": DEFAULT_NEWTON_SOLVER_PRM}
+            solver_parameters={"newton_solver": DEFAULT_NEWTON_SOLVER_PRM},
         )
         state_n['u'] = model.state1['u']
         info = {}
     else:
-        raise ValueError(f"Unknown `linear_solver`: '{linear_solver}'")
+        raise ValueError(f"Unknown `solver`: '{solver}'")
 
     return state_n, info
 
+
 # TODO: Refactor this to simply set appropriate blocks to a vector from value
-def _set_coupled_model_substate(model: comodel.BaseTransientFSIModel, xsub: bv.BlockVector):
+def _set_coupled_model_substate(
+    model: comodel.BaseTransientFSIModel, xsub: bv.BlockVector
+):
     """
     Set a subset of blocks in `model.state` from a given block vector
 
@@ -172,12 +193,13 @@ def _set_coupled_model_substate(model: comodel.BaseTransientFSIModel, xsub: bv.B
     model.set_ini_state(_state)
     model.set_fin_state(_state)
 
+
 @_add_static_docstring
 def static_coupled_configuration_picard(
-        model: comodel.BaseTransientFSIModel,
-        control: bv.BlockVector,
-        prop: bv.BlockVector,
-    ) -> Tuple[bv.BlockVector, Info]:
+    model: comodel.BaseTransientFSIModel,
+    control: bv.BlockVector,
+    prop: bv.BlockVector,
+) -> Tuple[bv.BlockVector, Info]:
     """
     Solve for the static state of a coupled model
 
@@ -188,8 +210,10 @@ def static_coupled_configuration_picard(
     # This solves the static state only with (displacement, flow rate, pressure)
     # i.e. this ignores the velocity and acceleration of the solid
     labels = ['u', 'q', 'p']
+
     def iterative_subproblem(x_n):
         _set_coupled_model_substate(model, x_n)
+
         def assem_res():
             return model.assem_res()[labels]
 
@@ -205,7 +229,7 @@ def static_coupled_configuration_picard(
                 solid.residual.form['coeff.state.u1'],
                 bcs=solid.residual.dirichlet_bcs,
                 # J= ... ()
-                solver_parameters={"newton_solver": DEFAULT_NEWTON_SOLVER_PRM}
+                solver_parameters={"newton_solver": DEFAULT_NEWTON_SOLVER_PRM},
             )
             # the vector corresponding to solid.residual.form['coeff.state.u1']
             u = bv.BlockVector([solid.state1['u'].copy()], labels=[['u']])
@@ -229,19 +253,21 @@ def static_coupled_configuration_picard(
     x_n[labels] = _x_n
     return x_n, info
 
+
 # TODO: This one has a strange bug where Newton convergence is very slow
 # I'm not sure if the answer it returns is correct or not
 @_add_static_docstring
 def static_coupled_configuration_newton(
-        model: comodel.BaseTransientFSIModel,
-        control: bv.BlockVector,
-        prop: bv.BlockVector,
-        dt: float=1e6
-    ) -> Tuple[bv.BlockVector, Info]:
+    model: comodel.BaseTransientFSIModel,
+    control: bv.BlockVector,
+    prop: bv.BlockVector,
+    dt: float = 1e6,
+) -> Tuple[bv.BlockVector, Info]:
     """
     Return the static equilibrium state for a coupled model
 
     """
+
     def newton_subproblem(x_0):
         """
         Linear subproblem to be solved in a Newton solution strategy
