@@ -1,13 +1,19 @@
 """
 Functionality for creating model objects from meshes, etc.
 """
+
 from os import path
 from typing import Union, Optional, Type, Any, Tuple
 import numpy as np
 import dolfin as dfn
 
 from . import meshutils
-from .models.transient import solid as tsmd, fluid as tfmd, acoustic as tamd, coupled as tcmd
+from .models.transient import (
+    solid as tsmd,
+    fluid as tfmd,
+    acoustic as tamd,
+    coupled as tcmd,
+)
 from .models.dynamical import solid as dsmd, fluid as dfmd, coupled as dcmd
 
 SolidModel = Union[tsmd.Model, dsmd.Model]
@@ -17,12 +23,13 @@ FluidClass = Union[Type[tfmd.Model], Type[dfmd.Model]]
 
 Labels = list[str]
 
+
 def load_solid_model(
-        mesh: str,
-        SolidType: SolidClass,
-        pressure_facet_labels: Optional[Labels]=('pressure',),
-        fixed_facet_labels: Optional[Labels]=('fixed',)
-    ) -> SolidModel:
+    mesh: str,
+    SolidType: SolidClass,
+    pressure_facet_labels: Optional[Labels] = ('pressure',),
+    fixed_facet_labels: Optional[Labels] = ('fixed',),
+) -> SolidModel:
     """
     Load a solid model of the specified type
 
@@ -47,25 +54,31 @@ def load_solid_model(
         # it uses the .xml (no longer supported) or newer gmsh interface
         if ext.lower() == '.xml':
             # The solid mesh is an xml file
-            mesh, mesh_funcs, mesh_entities_label_to_value = meshutils.load_fenics_xml(mesh)
+            mesh, mesh_funcs, mesh_entities_label_to_value = meshutils.load_fenics_xml(
+                mesh
+            )
         elif ext.lower() == '.msh':
             # The solid mesh is an gmsh file
-            mesh, mesh_funcs, mesh_entities_label_to_value = meshutils.load_fenics_gmsh(mesh)
+            mesh, mesh_funcs, mesh_entities_label_to_value = meshutils.load_fenics_gmsh(
+                mesh
+            )
         else:
             raise ValueError(f"Can't process mesh {mesh} with extension {ext}")
     else:
         raise TypeError(f"`solid_mesh` must be a path (`str`) not `{type(mesh)}`")
 
     return SolidType(
-        mesh, mesh_funcs, mesh_entities_label_to_value,
-        pressure_facet_labels, fixed_facet_labels
+        mesh,
+        mesh_funcs,
+        mesh_entities_label_to_value,
+        pressure_facet_labels,
+        fixed_facet_labels,
     )
 
+
 def load_fluid_model(
-        mesh: str,
-        FluidType: FluidClass,
-        idx_sep: Optional[int]=0
-    ) -> FluidModel:
+    mesh: str, FluidType: FluidClass, idx_sep: Optional[int] = 0
+) -> FluidModel:
     """
     Load a solid model of the specified type
 
@@ -81,13 +94,15 @@ def load_fluid_model(
         loading and fixed boundaries.
     """
     if issubclass(
-            FluidType,
-            (
-            dfmd.BernoulliFixedSep, dfmd.LinearizedBernoulliFixedSep,
-            dfmd.BernoulliFlowFixedSep, dfmd.LinearizedBernoulliFlowFixedSep,
-            tfmd.BernoulliFixedSep
-            )
-        ):
+        FluidType,
+        (
+            dfmd.BernoulliFixedSep,
+            dfmd.LinearizedBernoulliFixedSep,
+            dfmd.BernoulliFlowFixedSep,
+            dfmd.LinearizedBernoulliFlowFixedSep,
+            tfmd.BernoulliFixedSep,
+        ),
+    ):
         if len(idx_sep) == 1:
             idx_sep = idx_sep[0]
         else:
@@ -101,18 +116,19 @@ def load_fluid_model(
 
     return fluid
 
+
 # TODO: Can combine transient/dynamical model loading functions into single one
 def load_transient_fsi_model(
-        solid_mesh: str,
-        fluid_mesh: Any,
-        SolidType: SolidClass=tsmd.KelvinVoigt,
-        FluidType: FluidClass=tfmd.BernoulliAreaRatioSep,
-        fsi_facet_labels: Optional[Labels]=('pressure',),
-        fixed_facet_labels: Optional[Labels]=('fixed',),
-        separation_vertex_label: str='separation',
-        coupling: str='explicit',
-        zs: Optional[Tuple[float]]=None
-    ) -> tcmd.BaseTransientFSIModel:
+    solid_mesh: str,
+    fluid_mesh: Any,
+    SolidType: SolidClass = tsmd.KelvinVoigt,
+    FluidType: FluidClass = tfmd.BernoulliAreaRatioSep,
+    fsi_facet_labels: Optional[Labels] = ('pressure',),
+    fixed_facet_labels: Optional[Labels] = ('fixed',),
+    separation_vertex_label: str = 'separation',
+    coupling: str = 'explicit',
+    zs: Optional[Tuple[float]] = None,
+) -> tcmd.BaseTransientFSIModel:
     """
     Load a transient coupled (fsi) model
 
@@ -136,54 +152,66 @@ def load_transient_fsi_model(
         fluid/solid domains
     """
     ## Load the solid
-    solid = load_solid_model(solid_mesh, SolidType, fsi_facet_labels, fixed_facet_labels)
+    solid = load_solid_model(
+        solid_mesh, SolidType, fsi_facet_labels, fixed_facet_labels
+    )
     if zs is None:
         fluid, fsi_verts = derive_1dfluid_from_2dsolid(
-            solid, FluidType=FluidType,
-            fsi_facet_labels=fsi_facet_labels,
-            separation_vertex_label=separation_vertex_label
-        )
-        dofs_fsi_solid =dfn.vertex_to_dof_map(
-            solid.residual.form['coeff.fsi.p1'].function_space()
-        )[fsi_verts]
-        dofs_fsi_fluid = np.arange(dofs_fsi_solid.size)
-    else:
-        fluid, fsi_verts = derive_1dfluid_from_3dsolid(
-            solid, FluidType=FluidType,
+            solid,
+            FluidType=FluidType,
             fsi_facet_labels=fsi_facet_labels,
             separation_vertex_label=separation_vertex_label,
-            zs=zs
         )
-
-        # TODO: This FSI dof selection won't for higher order elements
-        dofs_fsi_solid = tuple(
-            dfn.vertex_to_dof_map(
-                solid.residual.form['coeff.fsi.p1'].function_space()
-            )[verts]
-            for verts in fsi_verts
-        )
-        dofs_fsi_fluid = tuple(np.arange(dofs.size) for dofs in dofs_fsi_solid)
-
-    if coupling == 'explicit':
-        model = tcmd.ExplicitFSIModel(solid, fluid, dofs_fsi_solid, dofs_fsi_fluid)
-    elif coupling == 'implicit':
-        model = tcmd.ImplicitFSIModel(solid, fluid, dofs_fsi_solid, dofs_fsi_fluid)
+        fluid = (fluid,)                   # normalize to tuple
+        fsi_verts = (fsi_verts,)           # single pair/list for 2D
     else:
-        raise ValueError(
-            f"'coupling' must be one of `['explicit', 'implicit']`, not `{coupling}`"
+        fluid, fsi_verts = derive_1dfluid_from_3dsolid(
+            solid,
+            FluidType=FluidType,
+            fsi_facet_labels=fsi_facet_labels,
+            separation_vertex_label=separation_vertex_label,
+            zs=zs,
         )
+
+    # Handle multiple fluid models by
+    """dofs_fsi_solid = dfn.vertex_to_dof_map(
+        solid.residual.form['coeff.fsi.p1'].function_space()
+    )[fsi_verts.flat]
+    dofs_fsi_fluid = (
+        np.ones(dofs_fsi_solid.shape[:-1], dtype=int)
+        * np.arange(dofs_fsi_solid.shape[-1], dtype=int)
+    ).reshape(-1)"""
+    V = solid.residual.form['coeff.fsi.p1'].function_space()
+    v2d = dfn.vertex_to_dof_map(V)
+    solid_dofs_list = []
+    fluid_dofs_list = []
+    for verts in fsi_verts:
+        # each item in fsi_verts_list is a 1D array of vertex ids on that z-plane
+        s_block = v2d[np.asarray(verts).ravel()]
+        solid_dofs_list.append(s_block)
+        fluid_dofs_list.append(np.arange(s_block.size, dtype=int))
+
+    # Instantiate the FSI model (multiple fluids supported)
+    if coupling == 'explicit':
+        model = tcmd.ExplicitFSIModel(solid, list(fluid), solid_dofs_list, fluid_dofs_list)
+    elif coupling == 'implicit':
+        model = tcmd.ImplicitFSIModel(solid, list(fluid), solid_dofs_list, fluid_dofs_list)
+    else:
+        raise ValueError("coupling must be 'explicit' or 'implicit'")
 
     return model
 
+
 def load_dynamical_fsi_model(
-        solid_mesh: str,
-        fluid_mesh: Any,
-        SolidType: SolidClass=dsmd.KelvinVoigt,
-        FluidType: FluidClass=dfmd.BernoulliAreaRatioSep,
-        fsi_facet_labels: Optional[Labels]=('pressure',),
-        fixed_facet_labels: Optional[Labels]=('fixed',),
-        separation_vertex_label: str='separation'
-    ) -> Union[dcmd.BaseDynamicalModel, dcmd.BaseLinearizedDynamicalModel]:
+    solid_mesh: str,
+    fluid_mesh: Any,
+    SolidType: SolidClass = dsmd.KelvinVoigt,
+    FluidType: FluidClass = dfmd.BernoulliAreaRatioSep,
+    fsi_facet_labels: Optional[Labels] = ('pressure',),
+    fixed_facet_labels: Optional[Labels] = ('fixed',),
+    separation_vertex_label: str = 'separation',
+    zs: Optional[Tuple[float]] = None,
+) -> Union[dcmd.BaseDynamicalModel, dcmd.BaseLinearizedDynamicalModel]:
     """
     Load a transient coupled (fsi) model
 
@@ -206,33 +234,52 @@ def load_dynamical_fsi_model(
         One of 'explicit' or 'implicit' indicating the coupling strategy between
         fluid/solid domains
     """
-    solid = load_solid_model(solid_mesh, SolidType, fsi_facet_labels, fixed_facet_labels)
-    fluid, fsi_verts = derive_1dfluid_from_2dsolid(
-        solid, FluidType=FluidType,
-        fsi_facet_labels=fsi_facet_labels,
-        separation_vertex_label=separation_vertex_label
+    solid = load_solid_model(
+        solid_mesh, SolidType, fsi_facet_labels, fixed_facet_labels
     )
+    if zs is None:
+        fluid, fsi_verts = derive_1dfluid_from_2dsolid(
+            solid,
+            FluidType=FluidType,
+            fsi_facet_labels=fsi_facet_labels,
+            separation_vertex_label=separation_vertex_label,
+        )
+    else:
+        fluid, fsi_verts = derive_1dfluid_from_3dsolid(
+            solid,
+            FluidType=FluidType,
+            fsi_facet_labels=fsi_facet_labels,
+            separation_vertex_label=separation_vertex_label,
+            zs=zs,
+        )
 
+    # TODO: This FSI dof selection won't for higher order elements
     dofs_fsi_solid = dfn.vertex_to_dof_map(
         solid.residual.form['coeff.fsi.p1'].function_space()
-    )[fsi_verts]
-    dofs_fsi_fluid = np.arange(dofs_fsi_solid.size)
+    )[fsi_verts.flat]
+    dofs_fsi_fluid = (
+        np.ones(dofs_fsi_solid.shape[:-1], dtype=int)
+        * np.arange(dofs_fsi_solid.shape[-1], dtype=int)
+    ).reshape(-1)
 
     if isinstance(solid, dcmd.LinearizedModel):
-        return dcmd.BaseLinearizedDynamicalFSIModel(solid, fluid, dofs_fsi_solid, dofs_fsi_fluid)
+        return dcmd.BaseLinearizedDynamicalFSIModel(
+            solid, fluid, dofs_fsi_solid, dofs_fsi_fluid
+        )
     else:
         return dcmd.BaseDynamicalFSIModel(solid, fluid, dofs_fsi_solid, dofs_fsi_fluid)
 
+
 def load_transient_fsai_model(
-        solid_mesh: str,
-        fluid_mesh: Any,
-        acoustic: tamd.Acoustic1D,
-        SolidType: SolidClass=tsmd.KelvinVoigt,
-        FluidType: FluidClass=tfmd.BernoulliAreaRatioSep,
-        fsi_facet_labels: Optional[Labels]=('pressure',),
-        fixed_facet_labels: Optional[Labels]=('fixed',),
-        coupling: str='explicit'
-    ):
+    solid_mesh: str,
+    fluid_mesh: Any,
+    acoustic: tamd.Acoustic1D,
+    SolidType: SolidClass = tsmd.KelvinVoigt,
+    FluidType: FluidClass = tfmd.BernoulliAreaRatioSep,
+    fsi_facet_labels: Optional[Labels] = ('pressure',),
+    fixed_facet_labels: Optional[Labels] = ('fixed',),
+    coupling: str = 'explicit',
+):
     # TODO: I haven't updated the acoustic model in a while so it's likely this
     # doesn't work
     """
@@ -255,25 +302,29 @@ def load_transient_fsai_model(
         One of 'explicit' or 'implicit' indicating the coupling strategy between
         fluid/solid domains
     """
-    solid = load_solid_model(solid_mesh, SolidType, fsi_facet_labels, fixed_facet_labels)
+    solid = load_solid_model(
+        solid_mesh, SolidType, fsi_facet_labels, fixed_facet_labels
+    )
     fluid, fsi_verts = derive_1dfluid_from_2dsolid(
-        solid_mesh, FluidType=FluidType,
-        fsi_facet_labels=fsi_facet_labels
+        solid_mesh, FluidType=FluidType, fsi_facet_labels=fsi_facet_labels
     )
 
-    dofs_fsi_solid = dfn.vertex_to_dof_map(solid.residual.form['fspace.scalar'])[fsi_verts]
+    dofs_fsi_solid = dfn.vertex_to_dof_map(solid.residual.form['fspace.scalar'])[
+        fsi_verts
+    ]
     dofs_fsi_fluid = np.arange(dofs_fsi_solid.size)
 
     return tcmd.FSAIModel(solid, fluid, acoustic, dofs_fsi_solid, dofs_fsi_fluid)
 
+
 # TODO: Refactor this function; currently does too many things
 # the function should take a loaded solid model and derive a fluid mesh from it
 def derive_1dfluid_from_2dsolid(
-        solid: SolidModel,
-        FluidType: FluidClass=tfmd.BernoulliAreaRatioSep,
-        fsi_facet_labels: Optional[Labels]=('pressure',),
-        separation_vertex_label: str='separation'
-    ) -> Tuple[FluidModel, np.ndarray]:
+    solid: SolidModel,
+    FluidType: FluidClass = tfmd.BernoulliAreaRatioSep,
+    fsi_facet_labels: Optional[Labels] = ('pressure',),
+    separation_vertex_label: str = 'separation',
+) -> Tuple[FluidModel, np.ndarray]:
     """
     Processes appropriate mappings between fluid/solid domains for FSI
 
@@ -299,22 +350,27 @@ def derive_1dfluid_from_2dsolid(
         solid.residual.mesh_function_label_to_value('facet')[name]
         for name in fsi_facet_labels
     ]
-    fsi_edges = np.array([
-        nedge for nedge, fedge in enumerate(solid.residual.mesh_function('facet').array())
-        if fedge in set(fsi_facet_ids)
-    ])
+    fsi_edges = np.array(
+        [
+            nedge
+            for nedge, fedge in enumerate(solid.residual.mesh_function('facet').array())
+            if fedge in set(fsi_facet_ids)
+        ]
+    )
 
     # Load a fluid by computing a 1D fluid mesh from the solid's medial surface
     mesh = solid.residual.mesh()
     s, fsi_verts = derive_1dfluidmesh_from_edges(mesh, fsi_edges)
     if issubclass(
-            FluidType,
-            (
-            dfmd.BernoulliFixedSep, dfmd.LinearizedBernoulliFixedSep,
-            dfmd.BernoulliFlowFixedSep, dfmd.LinearizedBernoulliFlowFixedSep,
-            tfmd.BernoulliFixedSep
-            )
-        ):
+        FluidType,
+        (
+            dfmd.BernoulliFixedSep,
+            dfmd.LinearizedBernoulliFixedSep,
+            dfmd.BernoulliFlowFixedSep,
+            dfmd.LinearizedBernoulliFlowFixedSep,
+            tfmd.BernoulliFixedSep,
+        ),
+    ):
         sep_vert = locate_separation_vertex(solid, separation_vertex_label)
 
         fsi_verts_fluid_ord = np.arange(fsi_verts.size)
@@ -332,13 +388,14 @@ def derive_1dfluid_from_2dsolid(
 
     return fluid, fsi_verts
 
+
 def derive_1dfluid_from_3dsolid(
-        solid: SolidModel,
-        FluidType: FluidClass=tfmd.BernoulliAreaRatioSep,
-        fsi_facet_labels: Optional[Labels]=('pressure',),
-        separation_vertex_label: str='separation',
-        zs: Optional[np.typing.NDArray[int]]=None
-    ) -> Tuple[FluidModel, np.ndarray]:
+    solid: SolidModel,
+    FluidType: FluidClass = tfmd.BernoulliAreaRatioSep,
+    fsi_facet_labels: Optional[Labels] = ('pressure',),
+    separation_vertex_label: str = 'separation',
+    zs: Optional[np.typing.NDArray[int]] = None,
+) -> Tuple[FluidModel, np.ndarray]:
     """
     Processes appropriate mappings between fluid/solid domains for FSI
 
@@ -363,12 +420,11 @@ def derive_1dfluid_from_3dsolid(
 
     ## Process the fsi surface vertices to set the coupling between solid and fluid
     # Find vertices corresponding to the fsi facets
+    
     mesh = solid.residual.mesh()
-    fluids = []
-    fsi_verts_coll = []
+    fsi_verts_list = []
+    s_list = []
     for z in zs:
-
-        # TODO: Replace this with multiple z's
         facets = meshutils.extract_zplane_facets(mesh, z=z)
 
         fsi_facet_ids = [
@@ -381,33 +437,43 @@ def derive_1dfluid_from_3dsolid(
         fsi_edges = np.array([edge.index() for edge in fsi_edges])
 
         s, fsi_verts = derive_1dfluidmesh_from_edges(mesh, fsi_edges)
-        fsi_verts_coll.append(fsi_verts)
+        s_list.append(s)
+        fsi_verts_list.append(fsi_verts)
         if issubclass(
-                FluidType,
-                (
-                dfmd.BernoulliFixedSep, dfmd.LinearizedBernoulliFixedSep,
-                dfmd.BernoulliFlowFixedSep, dfmd.LinearizedBernoulliFlowFixedSep,
-                tfmd.BernoulliFixedSep
-                )
-            ):
-            sep_vert = locate_separation_vertex(solid, separation_vertex_label)
+            FluidType,
+            (
+                dfmd.BernoulliFixedSep,
+                dfmd.LinearizedBernoulliFixedSep,
+                dfmd.BernoulliFlowFixedSep,
+                dfmd.LinearizedBernoulliFlowFixedSep,
+                tfmd.BernoulliFixedSep,
+            ),
+        ):
+            # TODO: For this to work you should generalize a fixed separation point
+            # to a fixed-separation line I guess
+            # sep_vert = locate_separation_vertex(solid, separation_vertex_label)
 
-            fsi_verts_fluid_ord = np.arange(fsi_verts.size)
-            idx_sep = fsi_verts_fluid_ord[fsi_verts == sep_vert]
-            if len(idx_sep) == 1:
-                idx_sep = idx_sep[0]
-            else:
-                raise ValueError(
-                    "Expected to find single separation point on FSI surface"
-                    f" but found {len(idx_sep):d} instead"
-                )
-            fluid = FluidType(s, idx_sep=idx_sep)
-        else:
-            fluid = FluidType(s)
+            # fsi_verts_fluid_ord = np.arange(fsi_verts.size)
+            # idx_sep = fsi_verts_fluid_ord[fsi_verts == sep_vert]
+            # if len(idx_sep) == 1:
+            #     idx_sep = idx_sep[0]
+            # else:
+            #     raise ValueError(
+            #         "Expected to find single separation point on FSI surface"
+            #         f" but found {len(idx_sep):d} instead"
+            #     )
+            # fluid = FluidType(s, idx_sep=idx_sep)
+            raise ValueError("3D models can't handle fixed separation points yet")
 
-        fluids.append(fluid)
+    #s = np.array(s_list)
+    #fluid = FluidType(s)
+    #return fluid, np.array(fsi_verts_list, dtype=int)
+    # build s_list, fsi_verts_list for each station as now
+    fluids = []
+    # One fluid per z-plane (NZ+1 slices → NZ+1 fluids)
+    fluids = [FluidType(s) for s in s_list]
+    return tuple(fluids), fsi_verts_list
 
-    return fluids, fsi_verts_coll
 
 def derive_1dfluidmesh_from_edges(mesh, fsi_edges):
 
@@ -421,10 +487,10 @@ def derive_1dfluidmesh_from_edges(mesh, fsi_edges):
 
     return s, fsi_verts
 
+
 def locate_separation_vertex(
-        solid: SolidModel,
-        separation_vertex_label: str='separation'
-    ):
+    solid: SolidModel, separation_vertex_label: str = 'separation'
+):
     # If the fluid has a fixed-separation point, set the appropriate
     # separation point for the fluid
     vertex_label_to_id = solid.residual.mesh_function_label_to_value('vertex')
