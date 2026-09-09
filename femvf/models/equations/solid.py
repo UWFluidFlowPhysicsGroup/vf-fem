@@ -711,11 +711,6 @@ class IsotropicElasticSwellingFormFiber(PredefinedForm):
         }
 
         return ufl.inner(S, DE) * dx, expressions
-        
-
-        
-
-
 
 class IsotropicElasticSwellingPowerLawForm(PredefinedForm):
     """

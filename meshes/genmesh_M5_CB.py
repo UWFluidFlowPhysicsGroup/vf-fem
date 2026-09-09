@@ -19,6 +19,7 @@ def proc_M5(medial_angle):
 
     gmsh.model.add_physical_group(2, [2], name='body')
     gmsh.model.add_physical_group(2, [1], name='cover')
+    gmsh.model.add_physical_group(2, [3], name='scar')
 
     gmsh.model.add_physical_group(1, [11, 10, 9, 8, 12], name='pressure')
     gmsh.model.add_physical_group(1, [13, 7, 1], name='fixed')
