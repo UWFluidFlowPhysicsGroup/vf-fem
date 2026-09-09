@@ -524,6 +524,7 @@ class IsotropicElasticForm(PredefinedForm):
 
     COEFFICIENT_SPEC = {
         'coeff.state.u1': func_spec('CG', 1, 'vector'),
+        'coeff.state.v1': func_spec('CG', 1, 'vector'),
         'coeff.prop.emod': func_spec('DG', 0, 'scalar'),
         'coeff.prop.nu': const_spec('scalar', default_value=0.45),
     }
@@ -711,6 +712,11 @@ class IsotropicElasticSwellingFormFiber(PredefinedForm):
         }
 
         return ufl.inner(S, DE) * dx, expressions
+        
+
+        
+
+
 
 class IsotropicElasticSwellingPowerLawForm(PredefinedForm):
     """
@@ -1143,7 +1149,11 @@ class FenicsResidual(base.BaseResidual):
             for facet_label in fixed_facet_labels
         ]
         fun_space = self.form['coeff.state.u1'].function_space()
-        fixed_dis = dfn.Constant(mesh.topology().dim() * [0.0])
+        # VectorFunctionSpace uses geometric dimension, not topological dimension.
+        # A 2D triangle mesh stored with XYZ coordinates has topology dim 2 and
+        # geometric dim 3; using topology dim here yields Dirichlet values of the
+        # wrong length.
+        fixed_dis = dfn.Constant(mesh.geometric_dimension() * [0.0])
         self._dirichlet_bcs = tuple(
             dfn.DirichletBC(
                 fun_space, fixed_dis, self.mesh_function('facet'), fixed_subdomain_idx

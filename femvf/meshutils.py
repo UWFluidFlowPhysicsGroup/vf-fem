@@ -49,9 +49,10 @@ def load_fenics_gmsh(
     mio_mesh = mio.read(mesh_path, file_format='gmsh')
 
     # Check if the z-coordinate is uniformly zero. If it is then automatically
-    # trim the z-coordinate to create a 2D mesh
+    # trim the z-coordinate to create a 2D mesh.
+    # CAD/gmsh often writes tiny numerical z values (~1e-18) rather than exact 0.
     if mio_mesh.points.shape[1] == 3:
-        if np.all(mio_mesh.points[:, 2] == 0):
+        if np.allclose(mio_mesh.points[:, 2], 0.0, atol=1e-12):
             mio_mesh = mio.Mesh(
                 mio_mesh.points[:, :2],
                 mio_mesh.cells,
