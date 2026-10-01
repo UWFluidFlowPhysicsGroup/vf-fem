@@ -13,6 +13,8 @@ from typing import Tuple, Callable, Mapping, Union, Any, List
 from numpy.typing import ArrayLike
 import numpy as np
 import jax
+jax.config.update("jax_enable_x64", True)
+jax.config.update("jax_debug_nans", True)
 
 from blockarray import blockvec as bv
 

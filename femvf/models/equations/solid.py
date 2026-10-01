@@ -1149,11 +1149,14 @@ class FenicsResidual(base.BaseResidual):
             for facet_label in fixed_facet_labels
         ]
         fun_space = self.form['coeff.state.u1'].function_space()
-        # VectorFunctionSpace uses geometric dimension, not topological dimension.
-        # A 2D triangle mesh stored with XYZ coordinates has topology dim 2 and
-        # geometric dim 3; using topology dim here yields Dirichlet values of the
-        # wrong length.
-        fixed_dis = dfn.Constant(mesh.geometric_dimension() * [0.0])
+        # Use the function space's own value size rather than mesh.geometric_dimension().
+        # Some forms (e.g. IsotropicMembraneForm) build a 3-component formulation even
+        # on a 2D mesh (to represent out-of-plane contributions), which means the
+        # VectorFunctionSpace has value_size=3 while mesh.geometric_dimension()==2.
+        # Using geometric_dimension() in that case would produce a 2-component Constant
+        # that DirichletBC rejects with "Illegal value dimension (2), expecting (3)".
+        value_size = fun_space.ufl_element().value_size()
+        fixed_dis = dfn.Constant(value_size * [0.0])
         self._dirichlet_bcs = tuple(
             dfn.DirichletBC(
                 fun_space, fixed_dis, self.mesh_function('facet'), fixed_subdomain_idx
